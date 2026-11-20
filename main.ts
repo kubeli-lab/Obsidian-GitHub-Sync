@@ -3,6 +3,9 @@ import { simpleGit, SimpleGit, CleanOptions, SimpleGitOptions, StatusResult, Dif
 import { setIntervalAsync, clearIntervalAsync } from 'set-interval-async';
 import { analyzeDiff, digestSummary, digestDetails, fitSubject, fitBody, MAX_DIGEST_LINES, NoteDigest } from './digest';
 
+// Message of the stash created around a pull; identifies our own entries only.
+const SYNC_STASH_MESSAGE = 'vault-digest autostash';
+
 let simpleGitOptions: Partial<SimpleGitOptions>;
 let git: SimpleGit;
 
@@ -153,12 +156,39 @@ export default class GHSyncPlugin extends Plugin {
 		return body.length > 0 ? [subject, body.join("\n")] : [subject];
 	}
 
-	private reportConflicts(conflicted: string[]): void {
+	// Drops stash entries left by an earlier sync whose conflicts are now resolved.
+	// Kept if conflict markers are still staged: the stash is then the only clean copy.
+	private async dropResolvedSyncStash(): Promise<void> {
+		try {
+			const list = await git.raw(['stash', 'list', '--format=%gd %s']);
+			const refs = list.split("\n")
+				.filter((l) => l.includes(SYNC_STASH_MESSAGE))
+				.map((l) => l.split(" ")[0]);
+			if (refs.length === 0) {
+				return;
+			}
+			const withMarkers = await git.raw(['diff', '--cached', '-U0', '--no-color', '--name-only', '-G', '^<<<<<<< ']);
+			if (withMarkers.trim() !== "") {
+				this.showNotice("Vault Digest: conflict markers are still present, your stash is kept (git stash list).", 'WARNING', 10000);
+				return;
+			}
+			for (const ref of refs.reverse()) {
+				await git.raw(['stash', 'drop', ref]);
+			}
+		} catch (e) {
+			// Best effort: a leftover stash is harmless.
+		}
+	}
+
+	private reportConflicts(conflicted: string[], note?: string): void {
 		let conflictMsg = "Merge conflicts in:";
 		for (const c of conflicted) {
 			conflictMsg += "\n\t" + c;
 		}
 		conflictMsg += "\nResolve them or click sync button again to push with unresolved conflicts.";
+		if (note) {
+			conflictMsg += "\n" + note;
+		}
 		this.showNotice(conflictMsg, 'WARNING');
 		for (const c of conflicted) {
 			this.app.workspace.openLinkText("", c, true);
@@ -212,31 +242,49 @@ export default class GHSyncPlugin extends Plugin {
 		// remote changes about to be pulled (merge-base..origin/main)
 		const pulledDiff = await git.diffSummary(['HEAD...origin/main']).catch(() => undefined);
 
-		// Behind the remote with local edits: rebase onto the remote first (local edits
-		// are autostashed), so the new commit is made on top of up-to-date history.
-		// If that fails, fall back to the commit-then-pull flow below.
+		// Behind the remote with local edits: stash them, rebase onto the remote, then
+		// unstash, so the new commit is made on top of up-to-date history.
+		// Unstash conflict: the stash is kept and dropped automatically by the next
+		// sync once the conflict is resolved. Any other failure: fall back to the
+		// commit-then-pull flow below.
 		let pulled = false;
 		if (!clean) {
 			const behind = await git.raw(['rev-list', '--count', 'HEAD..origin/main'])
 				.then((r) => parseInt(r.trim(), 10) || 0)
 				.catch(() => 0);
 			if (behind > 0) {
-				try {
-					await git.pull('origin', 'main', { '--rebase': null, '--autostash': null });
-					pulled = true;
-				} catch (e) {
-					await git.rebase(['--abort']).catch(() => {});
-				}
-				if (pulled) {
-					const afterPull = await git.status().catch(() => undefined);
-					if (!afterPull) {
-						return;
+				const stashed = await git.stash(['push', '--include-untracked', '-m', SYNC_STASH_MESSAGE])
+					.then((out) => !out.includes('No local changes'))
+					.catch(() => undefined);
+				if (stashed !== undefined) {
+					try {
+						await git.pull('origin', 'main', { '--rebase': null });
+						pulled = true;
+					} catch (e) {
+						await git.rebase(['--abort']).catch(() => {});
 					}
-					if (afterPull.conflicted.length > 0) {
-						this.reportConflicts(afterPull.conflicted);
-						return;
+					if (stashed) {
+						try {
+							await git.stash(['pop']);
+						} catch (e) {
+							// Conflicts while restoring local edits: git keeps the stash entry.
+							const popStatus = await git.status().catch(() => undefined);
+							if (popStatus && popStatus.conflicted.length > 0) {
+								this.reportConflicts(popStatus.conflicted,
+									"Your local edits are kept in a git stash and are dropped automatically at the next sync, once the conflicts are resolved.");
+							} else {
+								this.showNotice(String(e) + "\nVault Digest: your local edits are kept in a git stash (git stash list).", 'ERROR', 10000);
+							}
+							return;
+						}
 					}
-					statusResult = afterPull;
+					if (pulled) {
+						const afterPull = await git.status().catch(() => undefined);
+						if (!afterPull) {
+							return;
+						}
+						statusResult = afterPull;
+					}
 				}
 			}
 		}
@@ -249,6 +297,7 @@ export default class GHSyncPlugin extends Plugin {
 			try {
 				await git.add("./*");
 				pushedDiff = await git.diffSummary(['--cached']).catch(() => undefined);
+				await this.dropResolvedSyncStash();
 				const digest = await this.computeDigest(pushedDiff);
 				await git.commit(this.buildCommitMessage(statusResult, pushedDiff, digest, hostname));
 		    } catch (e) {
