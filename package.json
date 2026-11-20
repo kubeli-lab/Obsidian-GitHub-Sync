@@ -1,7 +1,7 @@
 {
-	"name": "github-sync",
+	"name": "github-sync-rebase",
 	"version": "1.0.7",
-	"description": "Sync vault to personal GitHub.",
+	"description": "Sync your vault to a personal GitHub repo with rebase and detailed commit messages.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

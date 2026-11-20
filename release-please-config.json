@@ -4,7 +4,7 @@
   "packages": {
     ".": {
       "release-type": "node",
-      "package-name": "github-sync",
+      "package-name": "github-sync-rebase",
       "include-component-in-tag": false,
       "include-v-in-tag": false,
       "extra-files": [

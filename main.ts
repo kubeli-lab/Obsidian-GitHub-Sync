@@ -184,7 +184,7 @@ export default class GHSyncPlugin extends Plugin {
 		try {
 			await git.fetch();
 		} catch (e) {
-			this.showNotice(String(e) + "\nGitHub Sync: Invalid remote URL.", 'ERROR', 10000);
+			this.showNotice(String(e) + "\nGitHub Sync Rebase: Invalid remote URL.", 'ERROR', 10000);
 			return;
 		}
 
@@ -261,12 +261,12 @@ export default class GHSyncPlugin extends Plugin {
 				}
 				else
 				{
-					this.showNotice("GitHub Sync: " + statusUponOpening.behind + " commits behind remote.\nClick the GitHub ribbon icon to sync.", 'WARNING');
+					this.showNotice("GitHub Sync Rebase: " + statusUponOpening.behind + " commits behind remote.\nClick the GitHub ribbon icon to sync.", 'WARNING');
 				}
 			}
 			else
 			{
-				this.showNotice("GitHub Sync: up to date with remote.", 'INFO');
+				this.showNotice("GitHub Sync Rebase: up to date with remote.", 'INFO');
 			}
 		} catch (e) {
 			// don't care
@@ -381,7 +381,7 @@ class GHSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Notice level')
-			.setDesc('Choose which GitHub Sync notices are shown in the Obsidian UI.')
+			.setDesc('Choose which GitHub Sync Rebase notices are shown in the Obsidian UI.')
 			.addDropdown((dropdown) => dropdown
 				.addOption('ALL', 'ALL')
 				.addOption('WARNING', 'WARNING')

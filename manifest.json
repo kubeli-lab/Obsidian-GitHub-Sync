@@ -1,9 +1,9 @@
 {
-	"id": "github-sync",
-	"name": "GitHub Sync",
+	"id": "github-sync-rebase",
+	"name": "GitHub Sync Rebase",
 	"version": "1.0.7",
 	"minAppVersion": "0.15.0",
-	"description": "Sync vault to personal GitHub.",
+	"description": "Sync your vault to a personal GitHub repo with rebase and detailed commit messages.",
 	"author": "Deke Li",
 	"authorUrl": "https://github.com/lideke",
 	"isDesktopOnly": true
