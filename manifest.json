@@ -1,9 +1,9 @@
 {
-	"id": "github-sync",
-	"name": "GitHub Sync",
+	"id": "vault-digest",
+	"name": "Vault Digest",
 	"version": "1.1.0",
 	"minAppVersion": "0.15.0",
-	"description": "Sync vault to personal GitHub.",
+	"description": "Sync your vault to GitHub with rebase and commit messages that summarise your notes.",
 	"author": "Deke Li",
 	"authorUrl": "https://github.com/lideke",
 	"isDesktopOnly": true
