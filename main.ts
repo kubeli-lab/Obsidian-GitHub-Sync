@@ -300,18 +300,26 @@ export default class GHSyncPlugin extends Plugin {
 	}
 
 	// Push; if the remote moved since our fetch (another device pushed meanwhile),
-	// rebase onto it and push again, up to 3 attempts. Returns false when it stopped.
+	// rebase onto it and push again, up to 5 attempts with a short random pause so
+	// devices syncing at the same moment do not retry in lockstep.
+	// Returns false when it stopped.
 	private async pushWithRetry(interactive: boolean): Promise<boolean> {
-		for (let attempt = 0; attempt < 3; attempt++) {
+		const maxAttempts = 5;
+		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
 				await git.push('origin', this.branch, ['-u']);
 				return true;
 			} catch (e) {
 				const rejected = /rejected|non-fast-forward|fetch first|failed to push/i.test(String(e));
-				if (!rejected || attempt === 2) {
+				if (!rejected) {
 					this.showNotice(e, 'ERROR', 10000);
 					return false;
 				}
+				if (attempt === maxAttempts) {
+					this.showNotice("Vault Digest: push rejected " + maxAttempts + " times, another device is pushing at the same time. Your commit is kept locally: sync again.", 'WARNING', 10000);
+					return false;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 450 * attempt));
 				try {
 					await git.pull('origin', this.branch, { '--rebase': null });
 				} catch (pullError) {
