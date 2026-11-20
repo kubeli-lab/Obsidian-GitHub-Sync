@@ -70,6 +70,8 @@ Commits and PR titles follow [Conventional Commits](https://www.conventionalcomm
 - `feat!: ...` or a `BREAKING CHANGE:` footer: breaking change (major version bump)
 - `docs:`, `chore:`, `ci:`, `refactor:`, `test:` do not trigger a release
 
+The release workflow only runs when code files change (`main.ts`, `styles.css`, build config, `package*.json`, `manifest.json`). Docs-only pushes such as `README.md` never trigger it, even with a `feat:` or `fix:` title.
+
 Pull requests are merged with **squash** or **rebase** (no merge commits), so the PR title must follow the convention.
 
 On each push to `main`, release-please opens or updates a release PR that bumps `package.json` and `manifest.json`. Merging it creates the tag (without a `v` prefix) and the GitHub release, with `main.js`, `manifest.json` and `styles.css` attached. Release notes are generated on the GitHub release; there is no `CHANGELOG.md`.

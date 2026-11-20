@@ -4,6 +4,18 @@ on:
   push:
     branches:
       - main
+    # Only code changes can trigger a release; docs-only pushes are ignored.
+    # package.json, manifest.json and .release-please-manifest.json must stay
+    # listed: they change when the release PR is merged, which creates the release.
+    paths:
+      - "main.ts"
+      - "styles.css"
+      - "esbuild.config.mjs"
+      - "tsconfig.json"
+      - "package.json"
+      - "package-lock.json"
+      - "manifest.json"
+      - ".release-please-manifest.json"
 
 permissions: {}
 
