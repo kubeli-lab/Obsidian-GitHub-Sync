@@ -223,53 +223,64 @@ export default class GHSyncPlugin extends Plugin {
 
 	// Opens the merge tool configured in git (merge.tool); opendiff on macOS if none.
 	async ResolveConflicts(): Promise<void> {
+		// Latch set synchronously, before any await, so two clicks cannot both pass.
 		if (this.mergetoolOpen) {
 			return;
 		}
-		this.initGit();
-
-		const status = await git.status().catch(() => undefined);
-		if (!status) {
-			this.showNotice("Vault is not a Git repo or git binary cannot be found.", 'ERROR', 10000);
-			return;
-		}
-		if (status.conflicted.length === 0) {
-			this.showNotice("No conflicts to resolve.", 'INFO');
-			return;
-		}
-
-		const configured = (await git.raw(['config', '--get', 'merge.tool']).catch(() => "")).trim();
-		const tool = configured || (require("os").platform() === "darwin" ? "opendiff" : "");
-		if (!tool) {
-			this.showNotice("No git merge tool configured. Run: git config --global merge.tool <tool> (for example vscode, meld or kdiff3). The conflicted files are opened so you can edit them.", 'WARNING', 15000);
-			for (const c of status.conflicted) {
-				this.app.workspace.openLinkText("", c, true);
-			}
-			return;
-		}
-
-		this.showNotice("Opening git mergetool (" + tool + ")...", 'INFO');
 		this.mergetoolOpen = true;
+
+		let resumeSync = false;
 		try {
-			await this.runGit([
-				'-c', 'mergetool.keepBackup=false',
-				'mergetool', '--no-prompt',
-				...(configured ? [] : ['--tool=' + tool]),
-			]);
-		} catch (e) {
-			// Non-zero exit: the tool was closed without resolving every file.
+			this.initGit();
+
+			const status = await git.status().catch(() => undefined);
+			if (!status) {
+				this.showNotice("Vault is not a Git repo or git binary cannot be found.", 'ERROR', 10000);
+				return;
+			}
+			if (status.conflicted.length === 0) {
+				this.showNotice("No conflicts to resolve.", 'INFO');
+				return;
+			}
+
+			const configured = (await git.raw(['config', '--get', 'merge.tool']).catch(() => "")).trim();
+			const tool = configured || (require("os").platform() === "darwin" ? "opendiff" : "");
+			if (!tool) {
+				this.showNotice("No git merge tool configured. Run: git config --global merge.tool <tool> (for example vscode, meld or kdiff3). The conflicted files are opened so you can edit them.", 'WARNING', 15000);
+				for (const c of status.conflicted) {
+					this.app.workspace.openLinkText("", c, true);
+				}
+				return;
+			}
+
+			this.showNotice("Opening git mergetool (" + tool + ")...", 'INFO');
+			try {
+				await this.runGit([
+					'-c', 'mergetool.keepBackup=false',
+					'mergetool', '--no-prompt',
+					...(configured ? [] : ['--tool=' + tool]),
+				]);
+			} catch (e) {
+				// Non-zero exit: the tool was closed without resolving every file.
+			}
+
+			const after = await git.status().catch(() => undefined);
+			const unresolved = after ? await this.findUnresolvedConflicts(after.conflicted) : [];
+			if (unresolved.length > 0) {
+				this.reportConflicts(unresolved, undefined, false);
+				return;
+			}
+			this.showNotice("Conflicts resolved, syncing...", 'INFO');
+			resumeSync = true;
 		} finally {
 			this.mergetoolOpen = false;
 		}
 
-		const after = await git.status().catch(() => undefined);
-		const unresolved = after ? await this.findUnresolvedConflicts(after.conflicted) : [];
-		if (unresolved.length > 0) {
-			this.reportConflicts(unresolved, undefined, false);
-			return;
+		// Non-interactive: if this sync hits a new conflict it only reports it, so a
+		// user action starts the merge tool at most once.
+		if (resumeSync) {
+			await this.SyncNotes(false);
 		}
-		this.showNotice("Conflicts resolved, syncing...", 'INFO');
-		await this.SyncNotes();
 	}
 
 	// Conflicted files that still contain git conflict markers (not yet resolved).
@@ -293,7 +304,7 @@ export default class GHSyncPlugin extends Plugin {
 		return unresolved;
 	}
 
-	private reportConflicts(conflicted: string[], note?: string, openFiles: boolean = true): void {
+	private reportConflicts(conflicted: string[], note?: string, launchMergetool: boolean = false): void {
 		let conflictMsg = "Merge conflicts in:";
 		for (const c of conflicted) {
 			conflictMsg += "\n\t" + c;
@@ -311,13 +322,16 @@ export default class GHSyncPlugin extends Plugin {
 			});
 			new Notice(fragment, 15000);
 		}
-		// A new conflict opens the git merge tool right away; suspended retries do not.
-		if (openFiles) {
+		// Only a user-initiated sync opens the merge tool by itself; the notice
+		// button and the command remain available otherwise.
+		if (launchMergetool) {
 			void this.ResolveConflicts();
 		}
 	}
 
-	async SyncNotes()
+	// interactive: started by a user action (ribbon, command). Only then may a new
+	// conflict open the merge tool by itself; scheduled and startup syncs never do.
+	async SyncNotes(interactive: boolean = false)
 	{
 		const remote = this.settings.remoteURL.trim();
 
@@ -403,7 +417,8 @@ export default class GHSyncPlugin extends Plugin {
 							const popStatus = await git.status().catch(() => undefined);
 							if (popStatus && popStatus.conflicted.length > 0) {
 								this.reportConflicts(popStatus.conflicted,
-									"Your local edits are kept in a git stash and are dropped automatically once the conflicts are resolved and you sync again.");
+									"Your local edits are kept in a git stash and are dropped automatically once the conflicts are resolved and you sync again.",
+									interactive);
 							} else {
 								this.showNotice(String(e) + "\nVault Digest: your local edits are kept in a git stash (git stash list).", 'ERROR', 10000);
 							}
@@ -453,7 +468,7 @@ export default class GHSyncPlugin extends Plugin {
 		    	if (!conflictStatus) {
 		    		return;
 		    	}
-		    	this.reportConflicts(conflictStatus.conflicted);
+		    	this.reportConflicts(conflictStatus.conflicted, undefined, interactive);
 		    	return;
 		    }
 		}
@@ -515,7 +530,7 @@ export default class GHSyncPlugin extends Plugin {
 		await this.loadSettings();
 
 		const ribbonIconEl = this.addRibbonIcon('github', 'Sync with Remote', (evt: MouseEvent) => {
-			this.SyncNotes();
+			this.SyncNotes(true);
 		});
 		ribbonIconEl.addClass('gh-sync-ribbon');
 
@@ -531,7 +546,7 @@ export default class GHSyncPlugin extends Plugin {
 			id: 'github-sync-command',
 			name: 'Sync with Remote',
 			callback: () => {
-				this.SyncNotes();
+				this.SyncNotes(true);
 			}
 		});
 
