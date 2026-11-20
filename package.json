@@ -1,6 +1,6 @@
 {
 	"name": "vault-digest",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "Sync your vault to GitHub with rebase and commit messages that summarise your notes.",
 	"main": "main.js",
 	"scripts": {
