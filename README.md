@@ -70,7 +70,7 @@ Commits and PR titles follow [Conventional Commits](https://www.conventionalcomm
 - `feat!: ...` or a `BREAKING CHANGE:` footer: breaking change (major version bump)
 - `docs:`, `chore:`, `ci:`, `refactor:`, `test:` do not trigger a release
 
-The release workflow only runs when code files change (`main.ts`, `styles.css`, build config, `package*.json`, `manifest.json`). Docs-only pushes such as `README.md` never trigger it, even with a `feat:` or `fix:` title.
+The release workflow only runs when code files change (`main.ts`, `styles.css`, build config, `package*.json`, `manifest.json`). Docs-only pushes such as `README.md` never trigger it, even with a `feat:` or `fix:` title. To run it manually, use the Actions tab or `gh workflow run release-please.yml`; it still needs at least one `feat:` or `fix:` commit since the last release, or a `Release-As: x.y.z` footer to force a version.
 
 Pull requests are merged with **squash** or **rebase** (no merge commits), so the PR title must follow the convention.
 

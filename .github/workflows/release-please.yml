@@ -16,6 +16,8 @@ on:
       - "package-lock.json"
       - "manifest.json"
       - ".release-please-manifest.json"
+  # Manual run from the Actions tab; the paths filter does not apply here.
+  workflow_dispatch:
 
 permissions: {}
 
