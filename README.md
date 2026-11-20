@@ -1,17 +1,3 @@
-### Changelog 1.0.7
-- Simplified the sync success notice so successful runs show a shorter confirmation message.
-
-### Changelog 1.0.6
-- Plugin loads faster on start up
-
-### Changelog 1.0.5
-- Added option to automatically sync on start up if behind remote
-- Added "Sync with Remote" command to command palette
-
-### Changelog 1.0.4
-- Simplified setup process.
-- Allow SSH url for remote.
-
 ![](https://img.shields.io/badge/dynamic/json?logo=obsidian&color=%23483699&label=downloads&query=%24%5B%22github-sync%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json)
 
 # GitHub Sync
@@ -74,6 +60,19 @@ You can also use `Hide Success Message` to suppress the single confirmation noti
 If your git binary is not accessible from your system PATH (i.e. if you open up Command Prompt or Terminal and can't use git), you need to provide its location. I initialize git only when launching Cmder, so I need to input a custom path like so: `C:/Users/Kevin/scoop/apps/cmder-full/current/vendor/git-for-windows/cmd/`. Note that I excluded `git.exe` from the end of the path.
 
 You can also include your GitHub username and personal access token in the remote url. Like so: `https://{username}:{personal access token}@github.com/{username}/{repository name}`. This is not recommended anymore, but it was how the plugin worked prior to 1.0.4. If you're doing this, you'll have to add `.obsidian/plugins/github-sync/data.json` to your `.gitignore`. See: https://github.com/kevinmkchin/Obsidian-GitHub-Sync/issues/2#issuecomment-2168384792.
+
+## Contributing
+
+Commits and PR titles follow [Conventional Commits](https://www.conventionalcommits.org/), because releases are automated with [release-please](https://github.com/googleapis/release-please):
+
+- `feat: ...` new feature (minor version bump)
+- `fix: ...` bug fix (patch version bump)
+- `feat!: ...` or a `BREAKING CHANGE:` footer: breaking change (major version bump)
+- `docs:`, `chore:`, `ci:`, `refactor:`, `test:` do not trigger a release
+
+Pull requests are merged with **squash** or **rebase** (no merge commits), so the PR title must follow the convention.
+
+On each push to `main`, release-please opens or updates a release PR that bumps `package.json` and `manifest.json`. Merging it creates the tag (without a `v` prefix) and the GitHub release, with `main.js`, `manifest.json` and `styles.css` attached. Release notes are generated on the GitHub release; there is no `CHANGELOG.md`.
 
 ## Rationale
 

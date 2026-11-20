@@ -13,7 +13,8 @@
           "path": "manifest.json",
           "jsonpath": "$.version"
         }
-      ]
+      ],
+      "skip-changelog": true
     }
   }
 }
