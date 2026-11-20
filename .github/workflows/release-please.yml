@@ -23,6 +23,8 @@ permissions: {}
 
 jobs:
   release-please:
+    # Never run with write permissions from a non-default branch (manual dispatch).
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -36,14 +38,15 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          target-branch: main
 
-  # Build the plugin and attach the Obsidian release assets once a release exists.
-  assets:
+  # Build without any write permission: dependency install scripts run here.
+  build:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,6 +61,26 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: plugin-assets
+          path: |
+            main.js
+            manifest.json
+            styles.css
+          if-no-files-found: error
+
+  # Minimal job holding the write token: only uploads the built files.
+  upload:
+    needs: [release-please, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: plugin-assets
 
       - name: Upload release assets
         env:
