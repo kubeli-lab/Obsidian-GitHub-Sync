@@ -4,7 +4,7 @@
 	"version": "1.0.7",
 	"minAppVersion": "0.15.0",
 	"description": "Sync vault to personal GitHub.",
-	"author": "Kevin Chin",
-	"authorUrl": "https://kevin.gd/",
+	"author": "Deke Li",
+	"authorUrl": "https://github.com/lideke",
 	"isDesktopOnly": true
 }
