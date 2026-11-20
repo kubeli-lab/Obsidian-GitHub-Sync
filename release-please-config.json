@@ -1,0 +1,19 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "8f39c77",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "github-sync",
+      "include-component-in-tag": false,
+      "include-v-in-tag": false,
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "manifest.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}
