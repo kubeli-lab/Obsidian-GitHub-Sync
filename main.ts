@@ -180,16 +180,40 @@ export default class GHSyncPlugin extends Plugin {
 		}
 	}
 
-	private reportConflicts(conflicted: string[], note?: string): void {
+	// Conflicted files that still contain git conflict markers (not yet resolved).
+	private async findUnresolvedConflicts(conflicted: string[]): Promise<string[]> {
+		const fs = require("fs").promises;
+		const path = require("path");
+		//@ts-ignore
+		const base: string = this.app.vault.adapter.getBasePath();
+		const unresolved: string[] = [];
+		for (const file of conflicted) {
+			try {
+				const text: string = await fs.readFile(path.join(base, file), "utf8");
+				if (/^<<<<<<< /m.test(text) && /^>>>>>>> /m.test(text)) {
+					unresolved.push(file);
+				}
+			} catch (e) {
+				// Deleted or unreadable (e.g. delete/modify conflict): counts as unresolved.
+				unresolved.push(file);
+			}
+		}
+		return unresolved;
+	}
+
+	private reportConflicts(conflicted: string[], note?: string, openFiles: boolean = true): void {
 		let conflictMsg = "Merge conflicts in:";
 		for (const c of conflicted) {
 			conflictMsg += "\n\t" + c;
 		}
-		conflictMsg += "\nResolve them or click sync button again to push with unresolved conflicts.";
+		conflictMsg += "\nSync is suspended until these conflicts are resolved. Edit the files, then sync again.";
 		if (note) {
 			conflictMsg += "\n" + note;
 		}
 		this.showNotice(conflictMsg, 'WARNING');
+		if (!openFiles) {
+			return;
+		}
 		for (const c of conflicted) {
 			this.app.workspace.openLinkText("", c, true);
 		}
@@ -217,6 +241,18 @@ export default class GHSyncPlugin extends Plugin {
 
 		if (!statusResult) {
 			return;
+		}
+
+		// Suspend the sync while conflicts are unresolved: nothing is committed,
+		// pulled or pushed until the conflict markers are gone.
+		if (statusResult.conflicted.length > 0) {
+			const unresolved = await this.findUnresolvedConflicts(statusResult.conflicted);
+			if (unresolved.length > 0) {
+				// Files were already opened when the conflict appeared: do not reopen
+				// tabs on every manual or scheduled sync attempt.
+				this.reportConflicts(unresolved, undefined, false);
+				return;
+			}
 		}
 
 		//@ts-ignore
@@ -271,7 +307,7 @@ export default class GHSyncPlugin extends Plugin {
 							const popStatus = await git.status().catch(() => undefined);
 							if (popStatus && popStatus.conflicted.length > 0) {
 								this.reportConflicts(popStatus.conflicted,
-									"Your local edits are kept in a git stash and are dropped automatically at the next sync, once the conflicts are resolved.");
+									"Your local edits are kept in a git stash and are dropped automatically once the conflicts are resolved and you sync again.");
 							} else {
 								this.showNotice(String(e) + "\nVault Digest: your local edits are kept in a git stash (git stash list).", 'ERROR', 10000);
 							}

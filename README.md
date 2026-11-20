@@ -10,6 +10,7 @@ Sync your vault to a personal GitHub repo for **syncing across devices**, with a
 - Keep the success notice to one short confirmation message or hide it entirely.
 - **Note-aware commit messages**, computed locally in a few milliseconds: no AI, no API key, no diff sent anywhere.
 - **Rebase on pull**: no merge commit on every sync between devices. When you are behind the remote, your local edits are stashed, rebased onto it, then restored *before* the commit is made. If restoring them conflicts, resolve the conflicts and sync again: the stash (named `vault-digest autostash`) is dropped automatically once no conflict markers remain. If the rebase itself is not possible, the plugin restores your edits, commits first, then rebases, and as a last resort merges so conflicts can be resolved as before.
+- **Sync suspended on conflicts**: while any file still contains conflict markers, nothing is committed, pulled or pushed, including scheduled and on-startup syncs. Resolve the files (remove the `<<<<<<<`, `=======` and `>>>>>>>` lines) and sync again.
 - **Sync recap**: the success notice lists the files pushed and pulled.
 
 ### Commit messages
