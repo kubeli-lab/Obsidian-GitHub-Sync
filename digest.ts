@@ -26,7 +26,26 @@ function bump(map: Counter, key: string): void {
 	map.set(key, (map.get(key) ?? 0) + 1);
 }
 
+const FRONTMATTER_TAGS_RE = /^\s*tags?\s*:\s*(.+)$/i;
+
+// Inline frontmatter forms only: `tags: [a, b]`, `tags: a, b`, `tags: a b`.
+// Block lists (`tags:` then `- a`) cannot be told from a body list in a diff
+// without context lines, so they are not read.
+function collectFrontmatterTags(line: string, tags: Counter): void {
+	const m = FRONTMATTER_TAGS_RE.exec(line);
+	if (m === null) {
+		return;
+	}
+	for (const raw of m[1].replace(/[\[\]"']/g, "").split(/[,\s]+/)) {
+		const tag = raw.replace(/^#/, "").trim();
+		if (/^[A-Za-z][\w/-]*$/.test(tag)) {
+			bump(tags, tag);
+		}
+	}
+}
+
 function collect(line: string, links: Counter, tags: Counter): void {
+	collectFrontmatterTags(line, tags);
 	if (line.indexOf("[[") !== -1) {
 		LINK_RE.lastIndex = 0;
 		let m: RegExpExecArray | null;

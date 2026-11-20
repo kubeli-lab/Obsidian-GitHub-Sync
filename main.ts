@@ -269,21 +269,31 @@ export default class GHSyncPlugin extends Plugin {
 				return;
 			}
 
+			// Modify/delete conflicts need a choice (Keep / Delete buttons): the merge
+			// tool would ask for it on a terminal, which does not exist here.
+			const needDecision = new Set(this.modifyDeleteFiles(status));
+			const forTool = status.conflicted.filter((c) => !needDecision.has(c));
+			if (forTool.length === 0) {
+				await this.reportConflicts(status.conflicted, undefined, false);
+				return;
+			}
+
 			this.showNotice("Opening git mergetool (" + tool + ")...", 'INFO');
 			try {
 				await this.runGit([
 					'-c', 'mergetool.keepBackup=false',
 					'mergetool', '--no-prompt',
 					...(configured ? [] : ['--tool=' + tool]),
+					'--', ...forTool,
 				]);
 			} catch (e) {
 				// Non-zero exit: the tool was closed without resolving every file.
 			}
 
 			const after = await git.status().catch(() => undefined);
-			const unresolved = after ? await this.findUnresolvedConflicts(after.conflicted) : [];
+			const unresolved = after ? await this.findUnresolvedConflicts(after) : [];
 			if (unresolved.length > 0) {
-				this.reportConflicts(unresolved, undefined, false);
+				await this.reportConflicts(unresolved, undefined, false);
 				return;
 			}
 			this.showNotice("Conflicts resolved, syncing...", 'INFO');
@@ -332,7 +342,7 @@ export default class GHSyncPlugin extends Plugin {
 					return false;
 				}
 				if (st.conflicted.length > 0) {
-					this.reportConflicts(st.conflicted, undefined, interactive);
+					await this.reportConflicts(st.conflicted, undefined, interactive);
 					return false;
 				}
 			}
@@ -340,31 +350,78 @@ export default class GHSyncPlugin extends Plugin {
 		return false;
 	}
 
-	// Conflicted files that still contain git conflict markers (not yet resolved).
-	private async findUnresolvedConflicts(conflicted: string[]): Promise<string[]> {
+	// Files deleted on one side and modified on the other (git status DU / UD):
+	// no markers, so a person has to choose between keeping and deleting the file.
+	private modifyDeleteFiles(status: StatusResult): string[] {
+		return status.files
+			.filter((f) => ['DU', 'UD'].includes(f.index + f.working_dir))
+			.map((f) => f.path);
+	}
+
+	// Conflicted files that still need a person: conflict markers still in the
+	// file, or a modify/delete decision not taken yet.
+	private async findUnresolvedConflicts(status: StatusResult): Promise<string[]> {
 		const fs = require("fs").promises;
 		const path = require("path");
 		//@ts-ignore
 		const base: string = this.app.vault.adapter.getBasePath();
+		const needDecision = new Set(this.modifyDeleteFiles(status));
 		const unresolved: string[] = [];
-		for (const file of conflicted) {
+		for (const file of status.conflicted) {
+			if (needDecision.has(file)) {
+				unresolved.push(file);
+				continue;
+			}
 			try {
 				const text: string = await fs.readFile(path.join(base, file), "utf8");
 				if (/^<<<<<<< /m.test(text) && /^>>>>>>> /m.test(text)) {
 					unresolved.push(file);
 				}
 			} catch (e) {
-				// Deleted or unreadable (e.g. delete/modify conflict): counts as unresolved.
+				// Unreadable (e.g. deleted on both sides): counts as unresolved.
 				unresolved.push(file);
 			}
 		}
 		return unresolved;
 	}
 
-	private reportConflicts(conflicted: string[], note?: string, launchMergetool: boolean = false): void {
+	// Decision for a modify/delete conflict: keep the modified file, or delete it.
+	async ResolveFile(file: string, keep: boolean): Promise<void> {
+		if (this.syncing || this.mergetoolOpen) {
+			this.showNotice("Vault Digest: a sync is running, try again when it is done.", 'INFO');
+			return;
+		}
+		this.initGit();
+		try {
+			if (keep) {
+				await git.raw(['add', '--', file]);
+			} else {
+				await git.raw(['rm', '-f', '--', file]);
+			}
+		} catch (e) {
+			this.showNotice(e, 'ERROR', 10000);
+			return;
+		}
+		const st = await git.status().catch(() => undefined);
+		if (st && (await this.findUnresolvedConflicts(st)).length === 0) {
+			this.showNotice("Conflicts resolved, syncing...", 'INFO');
+			await this.SyncNotes(false);
+		} else {
+			this.showNotice(file + (keep ? " kept." : " deleted.") + " Other conflicts remain.", 'INFO');
+		}
+	}
+
+	private async reportConflicts(conflicted: string[], note?: string, launchMergetool: boolean = false): Promise<void> {
+		await this.showConflictNotice(conflicted, note, launchMergetool);
+	}
+
+	private async showConflictNotice(conflicted: string[], note: string | undefined, launchMergetool: boolean): Promise<void> {
+		const status = await git.status().catch(() => undefined);
+		const decisions = new Set(status ? this.modifyDeleteFiles(status) : []);
+
 		let conflictMsg = "Merge conflicts in:";
 		for (const c of conflicted) {
-			conflictMsg += "\n\t" + c;
+			conflictMsg += "\n\t" + c + (decisions.has(c) ? " (deleted on one side, modified on the other)" : "");
 		}
 		conflictMsg += "\nSync is suspended until these conflicts are resolved.";
 		if (note) {
@@ -376,15 +433,25 @@ export default class GHSyncPlugin extends Plugin {
 				text.style.whiteSpace = "pre-line";
 				const button = f.createEl("button", { text: "Resolve with git mergetool" });
 				button.addEventListener("click", () => { void this.ResolveConflicts(); });
+				for (const file of conflicted.filter((c) => decisions.has(c))) {
+					const row = f.createDiv({ text: file + ": " });
+					const keep = row.createEl("button", { text: "Keep file" });
+					keep.addEventListener("click", () => { void this.ResolveFile(file, true); });
+					const del = row.createEl("button", { text: "Delete file" });
+					del.addEventListener("click", () => { void this.ResolveFile(file, false); });
+				}
 			});
 			new Notice(fragment, 15000);
 		}
 		// Only a user-initiated sync opens the merge tool by itself; the notice
 		// button and the command remain available otherwise.
-		if (launchMergetool) {
+		if (launchMergetool && conflicted.some((c) => !decisions.has(c))) {
 			void this.ResolveConflicts();
 		}
 	}
+
+	// Conflicts already reported while suspended, to not repeat the notice.
+	private lastSuspendedKey = "";
 
 	// True while a sync runs: the git client is shared, so syncs never overlap
 	// (for example a ribbon click during a scheduled sync).
@@ -440,14 +507,19 @@ export default class GHSyncPlugin extends Plugin {
 		// Suspend the sync while conflicts are unresolved: nothing is committed,
 		// pulled or pushed until the conflict markers are gone.
 		if (statusResult.conflicted.length > 0) {
-			const unresolved = await this.findUnresolvedConflicts(statusResult.conflicted);
+			const unresolved = await this.findUnresolvedConflicts(statusResult);
 			if (unresolved.length > 0) {
-				// Files were already opened when the conflict appeared: do not reopen
-				// tabs on every manual or scheduled sync attempt.
-				this.reportConflicts(unresolved, undefined, false);
+				// Scheduled and startup syncs repeat this check: report a given set of
+				// conflicts once, a sync started by hand always reports.
+				const key = unresolved.slice().sort().join("|");
+				if (interactive || key !== this.lastSuspendedKey) {
+					this.lastSuspendedKey = key;
+					await this.reportConflicts(unresolved, undefined, false);
+				}
 				return;
 			}
 		}
+		this.lastSuspendedKey = "";
 
 		//@ts-ignore
 		let clean = statusResult.isClean();
@@ -513,7 +585,7 @@ export default class GHSyncPlugin extends Plugin {
 						}
 						if (popStatus.conflicted.length > 0) {
 							// Git keeps the stash entry; the next sync drops it once resolved.
-							this.reportConflicts(popStatus.conflicted,
+							await this.reportConflicts(popStatus.conflicted,
 								"Your local edits are kept in a git stash and are dropped automatically once the conflicts are resolved and you sync again.",
 								interactive);
 							return;
@@ -566,7 +638,7 @@ export default class GHSyncPlugin extends Plugin {
 		    	if (!conflictStatus) {
 		    		return;
 		    	}
-		    	this.reportConflicts(conflictStatus.conflicted, undefined, interactive);
+		    	await this.reportConflicts(conflictStatus.conflicted, undefined, interactive);
 		    	return;
 		    }
 		}
@@ -577,7 +649,7 @@ export default class GHSyncPlugin extends Plugin {
 			return;
 		}
 		if (postPull.conflicted.length > 0) {
-			this.reportConflicts(postPull.conflicted, undefined, interactive);
+			await this.reportConflicts(postPull.conflicted, undefined, interactive);
 			return;
 		}
 
