@@ -239,6 +239,10 @@ export default class GHSyncPlugin extends Plugin {
 		if (this.mergetoolOpen) {
 			return;
 		}
+		if (this.syncing) {
+			this.showNotice("Vault Digest: a sync is running, try again when it is done.", 'INFO');
+			return;
+		}
 		this.mergetoolOpen = true;
 
 		let resumeSync = false;
@@ -374,9 +378,27 @@ export default class GHSyncPlugin extends Plugin {
 		}
 	}
 
+	// True while a sync runs: the git client is shared, so syncs never overlap
+	// (for example a ribbon click during a scheduled sync).
+	private syncing = false;
+
 	// interactive: started by a user action (ribbon, command). Only then may a new
 	// conflict open the merge tool by itself; scheduled and startup syncs never do.
-	async SyncNotes(interactive: boolean = false)
+	async SyncNotes(interactive: boolean = false): Promise<void>
+	{
+		if (this.syncing) {
+			this.showNotice("Vault Digest: a sync is already running.", 'INFO');
+			return;
+		}
+		this.syncing = true;
+		try {
+			await this.runSync(interactive);
+		} finally {
+			this.syncing = false;
+		}
+	}
+
+	private async runSync(interactive: boolean): Promise<void>
 	{
 		const remote = this.settings.remoteURL.trim();
 
@@ -435,7 +457,12 @@ export default class GHSyncPlugin extends Plugin {
 		try {
 			await git.fetch();
 		} catch (e) {
-			this.showNotice(String(e) + "\nVault Digest: Invalid remote URL.", 'ERROR', 10000);
+			if (/could not resolve host|network is unreachable|connection timed out|operation timed out|connection refused|connection reset|temporary failure in name resolution|no route to host|failed to connect|could not connect|unable to connect|ssh: connect to host/i.test(String(e))) {
+				// Offline or remote down: nothing is wrong with the setup, retry later.
+				this.showNotice("Vault Digest: remote unreachable (offline?). Sync skipped, your notes are untouched.", 'WARNING', 8000);
+			} else {
+				this.showNotice(String(e) + "\nVault Digest: cannot fetch from the remote. Check the remote URL and your credentials.", 'ERROR', 10000);
+			}
 			return;
 		}
 
@@ -564,19 +591,19 @@ export default class GHSyncPlugin extends Plugin {
 	{
 		// check status
 		try {
-			simpleGitOptions = {
+			// Own client: the shared one belongs to the running sync.
+			const startGit = simpleGit({
 				//@ts-ignore
 			    baseDir: this.app.vault.adapter.getBasePath(),
 			    binary: this.settings.gitLocation + "git",
 			    maxConcurrentProcesses: 6,
 			    trimmed: false,
-			};
-			git = simpleGit(simpleGitOptions);
+			});
 
 			//check for remote changes
 			// git branch --set-upstream-to=origin/<branch>
-			await git.branch({'--set-upstream-to': 'origin/' + this.branch});
-			let statusUponOpening = await git.fetch().status();
+			await startGit.branch({'--set-upstream-to': 'origin/' + this.branch});
+			let statusUponOpening = await startGit.fetch().status();
 			if (statusUponOpening.behind > 0)
 			{
 				// Automatically sync if needed
