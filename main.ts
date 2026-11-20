@@ -153,6 +153,18 @@ export default class GHSyncPlugin extends Plugin {
 		return body.length > 0 ? [subject, body.join("\n")] : [subject];
 	}
 
+	private reportConflicts(conflicted: string[]): void {
+		let conflictMsg = "Merge conflicts in:";
+		for (const c of conflicted) {
+			conflictMsg += "\n\t" + c;
+		}
+		conflictMsg += "\nResolve them or click sync button again to push with unresolved conflicts.";
+		this.showNotice(conflictMsg, 'WARNING');
+		for (const c of conflicted) {
+			this.app.workspace.openLinkText("", c, true);
+		}
+	}
+
 	async SyncNotes()
 	{
 		const remote = this.settings.remoteURL.trim();
@@ -180,22 +192,6 @@ export default class GHSyncPlugin extends Plugin {
 		//@ts-ignore
 		let clean = statusResult.isClean();
 
-		let pushedDiff: DiffResult | undefined;
-
-		// git add .
-		// git commit -m "vault: sync from <hostname> (<summary>)" -m "<file list>"
-		if (!clean) {
-			try {
-				await git.add("./*");
-				pushedDiff = await git.diffSummary(['--cached']).catch(() => undefined);
-				const digest = await this.computeDigest(pushedDiff);
-				await git.commit(this.buildCommitMessage(statusResult, pushedDiff, digest, hostname));
-		    } catch (e) {
-		    	this.showNotice(e, 'ERROR', 10000);
-		    	return;
-		    }
-		}
-
 		// configure remote
 		try {
 			await git.removeRemote('origin').catch((e) => { this.showNotice(e, 'ERROR', 10000); });
@@ -216,35 +212,70 @@ export default class GHSyncPlugin extends Plugin {
 		// remote changes about to be pulled (merge-base..origin/main)
 		const pulledDiff = await git.diffSummary(['HEAD...origin/main']).catch(() => undefined);
 
+		// Behind the remote with local edits: rebase onto the remote first (local edits
+		// are autostashed), so the new commit is made on top of up-to-date history.
+		// If that fails, fall back to the commit-then-pull flow below.
+		let pulled = false;
+		if (!clean) {
+			const behind = await git.raw(['rev-list', '--count', 'HEAD..origin/main'])
+				.then((r) => parseInt(r.trim(), 10) || 0)
+				.catch(() => 0);
+			if (behind > 0) {
+				try {
+					await git.pull('origin', 'main', { '--rebase': null, '--autostash': null });
+					pulled = true;
+				} catch (e) {
+					await git.rebase(['--abort']).catch(() => {});
+				}
+				if (pulled) {
+					const afterPull = await git.status().catch(() => undefined);
+					if (!afterPull) {
+						return;
+					}
+					if (afterPull.conflicted.length > 0) {
+						this.reportConflicts(afterPull.conflicted);
+						return;
+					}
+					statusResult = afterPull;
+				}
+			}
+		}
+
+		let pushedDiff: DiffResult | undefined;
+
+		// git add .
+		// git commit -m "vault: sync from <hostname> (<summary>)" -m "<file list>"
+		if (!clean) {
+			try {
+				await git.add("./*");
+				pushedDiff = await git.diffSummary(['--cached']).catch(() => undefined);
+				const digest = await this.computeDigest(pushedDiff);
+				await git.commit(this.buildCommitMessage(statusResult, pushedDiff, digest, hostname));
+		    } catch (e) {
+		    	this.showNotice(e, 'ERROR', 10000);
+		    	return;
+		    }
+		}
+
 		// git pull --rebase origin main (linear history, no merge commits)
 		// on rebase conflict: abort, then retry as a merge so conflicts can be resolved as before
-	    try {
-	    	try {
-	    		await git.pull('origin', 'main', { '--rebase': null });
-	    	} catch (rebaseError) {
-	    		await git.rebase(['--abort']).catch(() => {});
-	    		await git.pull('origin', 'main', { '--no-rebase': null });
-	    	}
-	    } catch (e) {
-	    	let conflictStatus = await git.status().catch((error) => { this.showNotice(error, 'ERROR', 10000); return; });
-	    	if (!conflictStatus) {
-	    		return;
-	    	}
-    		let conflictMsg = "Merge conflicts in:";
-	    	//@ts-ignore
-			for (let c of conflictStatus.conflicted)
-			{
-				conflictMsg += "\n\t"+c;
-			}
-			conflictMsg += "\nResolve them or click sync button again to push with unresolved conflicts."
-			this.showNotice(conflictMsg, 'WARNING');
-			//@ts-ignore	
-			for (let c of conflictStatus.conflicted)
-			{
-				this.app.workspace.openLinkText("", c, true);
-			}
-	    	return;
-	    }
+		if (!pulled) {
+		    try {
+		    	try {
+		    		await git.pull('origin', 'main', { '--rebase': null });
+		    	} catch (rebaseError) {
+		    		await git.rebase(['--abort']).catch(() => {});
+		    		await git.pull('origin', 'main', { '--no-rebase': null });
+		    	}
+		    } catch (e) {
+		    	let conflictStatus = await git.status().catch((error) => { this.showNotice(error, 'ERROR', 10000); return; });
+		    	if (!conflictStatus) {
+		    		return;
+		    	}
+		    	this.reportConflicts(conflictStatus.conflicted);
+		    	return;
+		    }
+		}
 
 		// resolve merge conflicts
 		// git push origin main
