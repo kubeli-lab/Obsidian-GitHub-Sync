@@ -1,7 +1,7 @@
 {
-	"name": "github-sync-rebase",
+	"name": "vault-digest",
 	"version": "1.0.7",
-	"description": "Sync your vault to a personal GitHub repo with rebase and detailed commit messages.",
+	"description": "Sync your vault to GitHub with rebase and commit messages that summarise your notes.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

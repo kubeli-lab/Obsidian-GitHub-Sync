@@ -1,6 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Vault } from 'obsidian';
 import { simpleGit, SimpleGit, CleanOptions, SimpleGitOptions, StatusResult, DiffResult } from 'simple-git';
 import { setIntervalAsync, clearIntervalAsync } from 'set-interval-async';
+import { analyzeDiff, digestSummary, digestDetails, MAX_DIGEST_LINES, NoteDigest } from './digest';
 
 let simpleGitOptions: Partial<SimpleGitOptions>;
 let git: SimpleGit;
@@ -91,7 +92,26 @@ export default class GHSyncPlugin extends Plugin {
 		this.showNotice(lines.join("\n"), 'INFO', lines.length > 1 ? 8000 : undefined);
 	}
 
-	private buildCommitMessage(status: StatusResult, diff: DiffResult | undefined, hostname: string): string[] {
+	// One extra git call, markdown only, skipped for big diffs: keeps sync fast.
+	// Any failure falls back to the plain message.
+	private async computeDigest(summary: DiffResult | undefined): Promise<NoteDigest | undefined> {
+		if (!summary || summary.insertions + summary.deletions > MAX_DIGEST_LINES) {
+			return undefined;
+		}
+		try {
+			const diff = await git.raw([
+				'-c', 'core.quotepath=false',
+				'diff', '--cached', '-U0', '--no-color', '--no-ext-diff',
+				'--src-prefix=a/', '--dst-prefix=b/',
+				'--', '*.md',
+			]);
+			return analyzeDiff(diff);
+		} catch (e) {
+			return undefined;
+		}
+	}
+
+	private buildCommitMessage(status: StatusResult, diff: DiffResult | undefined, digest: NoteDigest | undefined, hostname: string): string[] {
 		const entries: string[] = [];
 		const counts: string[] = [];
 
@@ -118,7 +138,9 @@ export default class GHSyncPlugin extends Plugin {
 		add("renamed", "R", renamed);
 
 		const total = diff ? " +" + diff.insertions + " -" + diff.deletions : "";
-		const subject = "vault: sync from " + hostname + (counts.length > 0 ? " (" + counts.join(", ") + total + ")" : "");
+		const digestParts = digest ? digestSummary(digest) : [];
+		const subjectParts = counts.length > 0 ? [counts.join(", ") + total, ...digestParts] : digestParts;
+		const subject = "vault: sync from " + hostname + (subjectParts.length > 0 ? " (" + subjectParts.join("; ") + ")" : "");
 
 		const maxListed = 30;
 		const body = entries.slice(0, maxListed);
@@ -126,7 +148,18 @@ export default class GHSyncPlugin extends Plugin {
 			body.push("... and " + (entries.length - maxListed) + " more");
 		}
 
-		return body.length > 0 ? [subject, body.join("\n")] : [subject];
+		const sections: string[] = [];
+		if (digest) {
+			const details = digestDetails(digest);
+			if (details.length > 0) {
+				sections.push(details.join("\n"));
+			}
+		}
+		if (body.length > 0) {
+			sections.push(body.join("\n"));
+		}
+
+		return [subject, ...sections];
 	}
 
 	async SyncNotes()
@@ -164,7 +197,8 @@ export default class GHSyncPlugin extends Plugin {
 			try {
 				await git.add("./*");
 				pushedDiff = await git.diffSummary(['--cached']).catch(() => undefined);
-				await git.commit(this.buildCommitMessage(statusResult, pushedDiff, hostname));
+				const digest = await this.computeDigest(pushedDiff);
+				await git.commit(this.buildCommitMessage(statusResult, pushedDiff, digest, hostname));
 		    } catch (e) {
 		    	this.showNotice(e, 'ERROR', 10000);
 		    	return;
@@ -184,7 +218,7 @@ export default class GHSyncPlugin extends Plugin {
 		try {
 			await git.fetch();
 		} catch (e) {
-			this.showNotice(String(e) + "\nGitHub Sync Rebase: Invalid remote URL.", 'ERROR', 10000);
+			this.showNotice(String(e) + "\nVault Digest: Invalid remote URL.", 'ERROR', 10000);
 			return;
 		}
 
@@ -261,12 +295,12 @@ export default class GHSyncPlugin extends Plugin {
 				}
 				else
 				{
-					this.showNotice("GitHub Sync Rebase: " + statusUponOpening.behind + " commits behind remote.\nClick the GitHub ribbon icon to sync.", 'WARNING');
+					this.showNotice("Vault Digest: " + statusUponOpening.behind + " commits behind remote.\nClick the GitHub ribbon icon to sync.", 'WARNING');
 				}
 			}
 			else
 			{
-				this.showNotice("GitHub Sync Rebase: up to date with remote.", 'INFO');
+				this.showNotice("Vault Digest: up to date with remote.", 'INFO');
 			}
 		} catch (e) {
 			// don't care
@@ -381,7 +415,7 @@ class GHSyncSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Notice level')
-			.setDesc('Choose which GitHub Sync Rebase notices are shown in the Obsidian UI.')
+			.setDesc('Choose which Vault Digest notices are shown in the Obsidian UI.')
 			.addDropdown((dropdown) => dropdown
 				.addOption('ALL', 'ALL')
 				.addOption('WARNING', 'WARNING')
