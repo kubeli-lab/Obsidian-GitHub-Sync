@@ -39,6 +39,9 @@ export default class GHSyncPlugin extends Plugin {
 
 	settings: GHSyncSettings;
 
+	// True while the git mergetool window is open: syncs are held meanwhile.
+	private mergetoolOpen = false;
+
 	private shouldShowNotice(severity: NoticeSeverity): boolean {
 		switch (this.settings.noticeLevel) {
 			case 'ERROR':
@@ -180,6 +183,95 @@ export default class GHSyncPlugin extends Plugin {
 		}
 	}
 
+	private initGit(): void {
+		simpleGitOptions = {
+			//@ts-ignore
+		    baseDir: this.app.vault.adapter.getBasePath(),
+		    binary: this.settings.gitLocation + "git",
+		    maxConcurrentProcesses: 6,
+		    trimmed: false,
+		};
+		git = simpleGit(simpleGitOptions);
+	}
+
+	// Runs the git binary directly (no tty, no prompt). The PATH is completed
+	// because Obsidian launched from the Dock does not inherit the shell PATH,
+	// and merge tools such as `code` live in /usr/local/bin or /opt/homebrew/bin.
+	private runGit(args: string[]): Promise<string> {
+		const { execFile } = require("child_process");
+		const os = require("os");
+		const path = require("path");
+		//@ts-ignore
+		const cwd: string = this.app.vault.adapter.getBasePath();
+		const extra = os.platform() === "win32" ? [] : ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin", "/bin"];
+		const env = {
+			...process.env,
+			PATH: [process.env.PATH, ...extra].filter(Boolean).join(path.delimiter),
+			GIT_TERMINAL_PROMPT: "0",
+		};
+		return new Promise((resolve, reject) => {
+			execFile(this.settings.gitLocation + "git", args, { cwd, env, maxBuffer: 10 * 1024 * 1024 },
+				(err: Error | null, stdout: string, stderr: string) => {
+					if (err) {
+						reject(new Error(stderr || err.message));
+					} else {
+						resolve(stdout);
+					}
+				});
+		});
+	}
+
+	// Opens the merge tool configured in git (merge.tool); opendiff on macOS if none.
+	async ResolveConflicts(): Promise<void> {
+		if (this.mergetoolOpen) {
+			return;
+		}
+		this.initGit();
+
+		const status = await git.status().catch(() => undefined);
+		if (!status) {
+			this.showNotice("Vault is not a Git repo or git binary cannot be found.", 'ERROR', 10000);
+			return;
+		}
+		if (status.conflicted.length === 0) {
+			this.showNotice("No conflicts to resolve.", 'INFO');
+			return;
+		}
+
+		const configured = (await git.raw(['config', '--get', 'merge.tool']).catch(() => "")).trim();
+		const tool = configured || (require("os").platform() === "darwin" ? "opendiff" : "");
+		if (!tool) {
+			this.showNotice("No git merge tool configured. Run: git config --global merge.tool <tool> (for example vscode, meld or kdiff3). The conflicted files are opened so you can edit them.", 'WARNING', 15000);
+			for (const c of status.conflicted) {
+				this.app.workspace.openLinkText("", c, true);
+			}
+			return;
+		}
+
+		this.showNotice("Opening git mergetool (" + tool + ")...", 'INFO');
+		this.mergetoolOpen = true;
+		try {
+			await this.runGit([
+				'-c', 'mergetool.keepBackup=false',
+				'mergetool', '--no-prompt',
+				...(configured ? [] : ['--tool=' + tool]),
+			]);
+		} catch (e) {
+			// Non-zero exit: the tool was closed without resolving every file.
+		} finally {
+			this.mergetoolOpen = false;
+		}
+
+		const after = await git.status().catch(() => undefined);
+		const unresolved = after ? await this.findUnresolvedConflicts(after.conflicted) : [];
+		if (unresolved.length > 0) {
+			this.reportConflicts(unresolved, undefined, false);
+			return;
+		}
+		this.showNotice("Conflicts resolved, syncing...", 'INFO');
+		await this.SyncNotes();
+	}
+
 	// Conflicted files that still contain git conflict markers (not yet resolved).
 	private async findUnresolvedConflicts(conflicted: string[]): Promise<string[]> {
 		const fs = require("fs").promises;
@@ -206,16 +298,22 @@ export default class GHSyncPlugin extends Plugin {
 		for (const c of conflicted) {
 			conflictMsg += "\n\t" + c;
 		}
-		conflictMsg += "\nSync is suspended until these conflicts are resolved. Edit the files, then sync again.";
+		conflictMsg += "\nSync is suspended until these conflicts are resolved.";
 		if (note) {
 			conflictMsg += "\n" + note;
 		}
-		this.showNotice(conflictMsg, 'WARNING');
-		if (!openFiles) {
-			return;
+		if (this.shouldShowNotice('WARNING')) {
+			const fragment = createFragment((f) => {
+				const text = f.createDiv({ text: conflictMsg });
+				text.style.whiteSpace = "pre-line";
+				const button = f.createEl("button", { text: "Resolve with git mergetool" });
+				button.addEventListener("click", () => { void this.ResolveConflicts(); });
+			});
+			new Notice(fragment, 15000);
 		}
-		for (const c of conflicted) {
-			this.app.workspace.openLinkText("", c, true);
+		// A new conflict opens the git merge tool right away; suspended retries do not.
+		if (openFiles) {
+			void this.ResolveConflicts();
 		}
 	}
 
@@ -223,14 +321,12 @@ export default class GHSyncPlugin extends Plugin {
 	{
 		const remote = this.settings.remoteURL.trim();
 
-		simpleGitOptions = {
-			//@ts-ignore
-		    baseDir: this.app.vault.adapter.getBasePath(),
-		    binary: this.settings.gitLocation + "git",
-		    maxConcurrentProcesses: 6,
-		    trimmed: false,
-		};
-		git = simpleGit(simpleGitOptions);
+		if (this.mergetoolOpen) {
+			this.showNotice("Conflict resolution in progress: close the merge tool first.", 'INFO');
+			return;
+		}
+
+		this.initGit();
 
 		let os = require("os");
 		let hostname = os.hostname();
@@ -422,6 +518,14 @@ export default class GHSyncPlugin extends Plugin {
 			this.SyncNotes();
 		});
 		ribbonIconEl.addClass('gh-sync-ribbon');
+
+		this.addCommand({
+			id: 'resolve-conflicts',
+			name: 'Resolve conflicts with git mergetool',
+			callback: () => {
+				void this.ResolveConflicts();
+			}
+		});
 
 		this.addCommand({
 			id: 'github-sync-command',
