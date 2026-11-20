@@ -283,6 +283,39 @@ export default class GHSyncPlugin extends Plugin {
 		}
 	}
 
+	// Push; if the remote moved since our fetch (another device pushed meanwhile),
+	// rebase onto it and push again, up to 3 attempts. Returns false when it stopped.
+	private async pushWithRetry(interactive: boolean): Promise<boolean> {
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				await git.push('origin', 'main', ['-u']);
+				return true;
+			} catch (e) {
+				const rejected = /rejected|non-fast-forward|fetch first|failed to push/i.test(String(e));
+				if (!rejected || attempt === 2) {
+					this.showNotice(e, 'ERROR', 10000);
+					return false;
+				}
+				try {
+					await git.pull('origin', 'main', { '--rebase': null });
+				} catch (pullError) {
+					await git.rebase(['--abort']).catch(() => {});
+					this.showNotice(String(pullError) + "\nVault Digest: could not rebase onto the remote after a rejected push.", 'ERROR', 10000);
+					return false;
+				}
+				const st = await git.status().catch(() => undefined);
+				if (!st) {
+					return false;
+				}
+				if (st.conflicted.length > 0) {
+					this.reportConflicts(st.conflicted, undefined, interactive);
+					return false;
+				}
+			}
+		}
+		return false;
+	}
+
 	// Conflicted files that still contain git conflict markers (not yet resolved).
 	private async findUnresolvedConflicts(conflicted: string[]): Promise<string[]> {
 		const fs = require("fs").promises;
@@ -410,18 +443,27 @@ export default class GHSyncPlugin extends Plugin {
 						await git.rebase(['--abort']).catch(() => {});
 					}
 					if (stashed) {
+						// simple-git does not always throw when the pop stops on a conflict
+						// (exit code 1 without stderr), so the status is always checked.
+						let popError: unknown;
 						try {
 							await git.stash(['pop']);
 						} catch (e) {
-							// Conflicts while restoring local edits: git keeps the stash entry.
-							const popStatus = await git.status().catch(() => undefined);
-							if (popStatus && popStatus.conflicted.length > 0) {
-								this.reportConflicts(popStatus.conflicted,
-									"Your local edits are kept in a git stash and are dropped automatically once the conflicts are resolved and you sync again.",
-									interactive);
-							} else {
-								this.showNotice(String(e) + "\nVault Digest: your local edits are kept in a git stash (git stash list).", 'ERROR', 10000);
-							}
+							popError = e;
+						}
+						const popStatus = await git.status().catch(() => undefined);
+						if (!popStatus) {
+							return;
+						}
+						if (popStatus.conflicted.length > 0) {
+							// Git keeps the stash entry; the next sync drops it once resolved.
+							this.reportConflicts(popStatus.conflicted,
+								"Your local edits are kept in a git stash and are dropped automatically once the conflicts are resolved and you sync again.",
+								interactive);
+							return;
+						}
+						if (popError) {
+							this.showNotice(String(popError) + "\nVault Digest: your local edits are kept in a git stash (git stash list).", 'ERROR', 10000);
 							return;
 						}
 					}
@@ -473,16 +515,26 @@ export default class GHSyncPlugin extends Plugin {
 		    }
 		}
 
-		// resolve merge conflicts
-		// git push origin main
-	    if (!clean) {
-		    try {
-		    	await git.push('origin', 'main', ['-u']);
-		    } catch (e) {
-		    	this.showNotice(e, 'ERROR', 10000);
-		    	return;
+		// A pull can stop on conflicts without throwing: never go on to push them.
+		const postPull = await git.status().catch(() => undefined);
+		if (!postPull) {
+			return;
+		}
+		if (postPull.conflicted.length > 0) {
+			this.reportConflicts(postPull.conflicted, undefined, interactive);
+			return;
+		}
+
+		// git push origin main, whenever there is something to push: the commit made
+		// above, or commits left unpushed by an earlier sync whose push failed.
+		const ahead = await git.raw(['rev-list', '--count', 'origin/main..HEAD'])
+			.then((r) => parseInt(r.trim(), 10) || 0)
+			.catch(() => 1);
+		if (ahead > 0) {
+			if (!(await this.pushWithRetry(interactive))) {
+				return;
 			}
-	    }
+		}
 
 		this.showSyncSuccessNotice(clean ? undefined : pushedDiff, pulledDiff);
 	}
