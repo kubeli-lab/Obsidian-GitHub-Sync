@@ -25,6 +25,8 @@ M notes/todo.md (+9 -4)
 
 The summary counts, from the staged markdown diff only: links (`[[...]]`) added or removed, tags (`#tag`) added or removed, tasks checked off and new tasks. A link or tag that only moves inside a note is not counted. One extra `git diff` call on `*.md` files is made, and the analysis is skipped above 20,000 changed lines so a big sync stays fast. Any failure falls back to the plain file counts.
 
+Messages are size-limited however many notes change: the subject stays under 100 characters (the least important parts are dropped first), each body line under 100 characters, and the body under about 1,500 characters, ending with `... and N more` when it is cut.
+
 ![](screenshots/ribbon-button.png)
 
 ## How to Use

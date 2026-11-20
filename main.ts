@@ -1,7 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Vault } from 'obsidian';
 import { simpleGit, SimpleGit, CleanOptions, SimpleGitOptions, StatusResult, DiffResult } from 'simple-git';
 import { setIntervalAsync, clearIntervalAsync } from 'set-interval-async';
-import { analyzeDiff, digestSummary, digestDetails, MAX_DIGEST_LINES, NoteDigest } from './digest';
+import { analyzeDiff, digestSummary, digestDetails, fitSubject, fitBody, MAX_DIGEST_LINES, NoteDigest } from './digest';
 
 let simpleGitOptions: Partial<SimpleGitOptions>;
 let git: SimpleGit;
@@ -140,26 +140,17 @@ export default class GHSyncPlugin extends Plugin {
 		const total = diff ? " +" + diff.insertions + " -" + diff.deletions : "";
 		const digestParts = digest ? digestSummary(digest) : [];
 		const subjectParts = counts.length > 0 ? [counts.join(", ") + total, ...digestParts] : digestParts;
-		const subject = "vault: sync from " + hostname + (subjectParts.length > 0 ? " (" + subjectParts.join("; ") + ")" : "");
+		const subject = fitSubject("vault: sync from " + hostname, subjectParts);
 
-		const maxListed = 30;
-		const body = entries.slice(0, maxListed);
-		if (entries.length > maxListed) {
-			body.push("... and " + (entries.length - maxListed) + " more");
+		// Body: digest details first, then the file list, within a size budget.
+		const lines: string[] = digest ? digestDetails(digest) : [];
+		if (lines.length > 0 && entries.length > 0) {
+			lines.push("");
 		}
+		lines.push(...entries);
+		const body = fitBody(lines);
 
-		const sections: string[] = [];
-		if (digest) {
-			const details = digestDetails(digest);
-			if (details.length > 0) {
-				sections.push(details.join("\n"));
-			}
-		}
-		if (body.length > 0) {
-			sections.push(body.join("\n"));
-		}
-
-		return [subject, ...sections];
+		return body.length > 0 ? [subject, body.join("\n")] : [subject];
 	}
 
 	async SyncNotes()

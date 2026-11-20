@@ -172,3 +172,42 @@ export function digestDetails(d: NoteDigest, maxNames = 5): string[] {
 	list("Tags removed", d.tagsRemoved, (s) => "#" + s);
 	return lines;
 }
+
+// Commit message size limits: the subject stays on one readable line and the
+// body stays bounded however many notes changed.
+export const MAX_SUBJECT = 100;
+export const MAX_BODY_LINE = 100;
+export const MAX_BODY_CHARS = 1500;
+
+export function truncate(text: string, max: number): string {
+	return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)) + "…";
+}
+
+// Drops trailing parts (digest first, then counts) until the subject fits.
+export function fitSubject(prefix: string, parts: string[], max: number = MAX_SUBJECT): string {
+	const kept = parts.slice();
+	const build = () => (kept.length > 0 ? prefix + " (" + kept.join("; ") + ")" : prefix);
+	while (kept.length > 1 && build().length > max) {
+		kept.pop();
+	}
+	return truncate(build(), max);
+}
+
+// Truncates each line and stops once the character budget is used, ending
+// with "... and N more" so the cut is visible.
+export function fitBody(lines: string[], maxChars: number = MAX_BODY_CHARS, maxLine: number = MAX_BODY_LINE): string[] {
+	const out: string[] = [];
+	let used = 0;
+	const reserve = 24;
+	for (let i = 0; i < lines.length; i++) {
+		const line = truncate(lines[i], maxLine);
+		if (used + line.length + 1 > maxChars - reserve) {
+			const rest = lines.slice(i).filter((l) => l !== "").length;
+			out.push("... and " + rest + " more");
+			break;
+		}
+		out.push(line);
+		used += line.length + 1;
+	}
+	return out;
+}
