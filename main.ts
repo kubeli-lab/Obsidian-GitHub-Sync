@@ -17,6 +17,7 @@ type NoticeSeverity = 'INFO' | 'WARNING' | 'ERROR';
 interface GHSyncSettings {
 	remoteURL: string;
 	gitLocation: string;
+	branch: string;
 	syncinterval: number;
 	isSyncOnLoad: boolean;
 	checkStatusOnLoad: boolean;
@@ -27,6 +28,7 @@ interface GHSyncSettings {
 const DEFAULT_SETTINGS: GHSyncSettings = {
 	remoteURL: '',
 	gitLocation: '',
+	branch: 'main',
 	syncinterval: 0,
 	isSyncOnLoad: false,
 	checkStatusOnLoad: true,
@@ -183,6 +185,16 @@ export default class GHSyncPlugin extends Plugin {
 		}
 	}
 
+	// Main branch to sync with (setting, default "main"). The name is passed to git
+	// as an argument, so only plain ref characters are accepted.
+	private get branch(): string {
+		return (this.settings.branch || 'main').trim();
+	}
+
+	private isValidBranchName(name: string): boolean {
+		return /^[A-Za-z0-9_][A-Za-z0-9._\/-]*$/.test(name) && !name.includes('..') && !name.endsWith('/') && !name.endsWith('.lock');
+	}
+
 	private initGit(): void {
 		simpleGitOptions = {
 			//@ts-ignore
@@ -288,7 +300,7 @@ export default class GHSyncPlugin extends Plugin {
 	private async pushWithRetry(interactive: boolean): Promise<boolean> {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
-				await git.push('origin', 'main', ['-u']);
+				await git.push('origin', this.branch, ['-u']);
 				return true;
 			} catch (e) {
 				const rejected = /rejected|non-fast-forward|fetch first|failed to push/i.test(String(e));
@@ -297,7 +309,7 @@ export default class GHSyncPlugin extends Plugin {
 					return false;
 				}
 				try {
-					await git.pull('origin', 'main', { '--rebase': null });
+					await git.pull('origin', this.branch, { '--rebase': null });
 				} catch (pullError) {
 					await git.rebase(['--abort']).catch(() => {});
 					this.showNotice(String(pullError) + "\nVault Digest: could not rebase onto the remote after a rejected push.", 'ERROR', 10000);
@@ -386,6 +398,15 @@ export default class GHSyncPlugin extends Plugin {
 			return;
 		}
 
+		if (!this.isValidBranchName(this.branch)) {
+			this.showNotice("Vault Digest: invalid main branch name \"" + this.branch + "\" in the settings.", 'ERROR', 10000);
+			return;
+		}
+		if (statusResult.current && statusResult.current !== this.branch) {
+			this.showNotice("Vault Digest: the vault is on branch \"" + statusResult.current + "\" but the main branch setting is \"" + this.branch + "\". Switch branch or change the setting.", 'ERROR', 10000);
+			return;
+		}
+
 		// Suspend the sync while conflicts are unresolved: nothing is committed,
 		// pulled or pushed until the conflict markers are gone.
 		if (statusResult.conflicted.length > 0) {
@@ -418,8 +439,8 @@ export default class GHSyncPlugin extends Plugin {
 			return;
 		}
 
-		// remote changes about to be pulled (merge-base..origin/main)
-		const pulledDiff = await git.diffSummary(['HEAD...origin/main']).catch(() => undefined);
+		// remote changes about to be pulled (merge-base..origin/<branch>)
+		const pulledDiff = await git.diffSummary(['HEAD...origin/' + this.branch]).catch(() => undefined);
 
 		// Behind the remote with local edits: stash them, rebase onto the remote, then
 		// unstash, so the new commit is made on top of up-to-date history.
@@ -428,7 +449,7 @@ export default class GHSyncPlugin extends Plugin {
 		// commit-then-pull flow below.
 		let pulled = false;
 		if (!clean) {
-			const behind = await git.raw(['rev-list', '--count', 'HEAD..origin/main'])
+			const behind = await git.raw(['rev-list', '--count', 'HEAD..origin/' + this.branch])
 				.then((r) => parseInt(r.trim(), 10) || 0)
 				.catch(() => 0);
 			if (behind > 0) {
@@ -437,7 +458,7 @@ export default class GHSyncPlugin extends Plugin {
 					.catch(() => undefined);
 				if (stashed !== undefined) {
 					try {
-						await git.pull('origin', 'main', { '--rebase': null });
+						await git.pull('origin', this.branch, { '--rebase': null });
 						pulled = true;
 					} catch (e) {
 						await git.rebase(['--abort']).catch(() => {});
@@ -500,10 +521,10 @@ export default class GHSyncPlugin extends Plugin {
 		if (!pulled) {
 		    try {
 		    	try {
-		    		await git.pull('origin', 'main', { '--rebase': null });
+		    		await git.pull('origin', this.branch, { '--rebase': null });
 		    	} catch (rebaseError) {
 		    		await git.rebase(['--abort']).catch(() => {});
-		    		await git.pull('origin', 'main', { '--no-rebase': null });
+		    		await git.pull('origin', this.branch, { '--no-rebase': null });
 		    	}
 		    } catch (e) {
 		    	let conflictStatus = await git.status().catch((error) => { this.showNotice(error, 'ERROR', 10000); return; });
@@ -527,7 +548,7 @@ export default class GHSyncPlugin extends Plugin {
 
 		// git push origin main, whenever there is something to push: the commit made
 		// above, or commits left unpushed by an earlier sync whose push failed.
-		const ahead = await git.raw(['rev-list', '--count', 'origin/main..HEAD'])
+		const ahead = await git.raw(['rev-list', '--count', 'origin/' + this.branch + '..HEAD'])
 			.then((r) => parseInt(r.trim(), 10) || 0)
 			.catch(() => 1);
 		if (ahead > 0) {
@@ -553,8 +574,8 @@ export default class GHSyncPlugin extends Plugin {
 			git = simpleGit(simpleGitOptions);
 
 			//check for remote changes
-			// git branch --set-upstream-to=origin/main main
-			await git.branch({'--set-upstream-to': 'origin/main'});
+			// git branch --set-upstream-to=origin/<branch>
+			await git.branch({'--set-upstream-to': 'origin/' + this.branch});
 			let statusUponOpening = await git.fetch().status();
 			if (statusUponOpening.behind > 0)
 			{
@@ -678,6 +699,17 @@ class GHSyncSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
         	.inputEl.addClass('my-plugin-setting-text'));
+
+		new Setting(containerEl)
+			.setName('Main branch')
+			.setDesc('Branch to pull from and push to. The vault must be on this branch. Default: main.')
+			.addText(text => text
+				.setPlaceholder('main')
+				.setValue(this.plugin.settings.branch)
+				.onChange(async (value) => {
+					this.plugin.settings.branch = value.trim() || 'main';
+					await this.plugin.saveSettings();
+				}));
 
 		new Setting(containerEl)
 			.setName('git binary location')

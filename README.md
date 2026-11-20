@@ -69,6 +69,8 @@ The first time may prompt you to authenticate if you haven't, or it may ask you 
 
 ### Optional
 
+**Main branch**: by default the plugin pulls from and pushes to `main`. If your vault uses another branch (for example `master`), enter its name in the *Main branch* setting. The vault must be on that branch, otherwise the sync stops with an explanatory notice.
+
 You can reduce UI noise from sync operations with the `Notice level` setting:
 - `ALL` shows every Vault Digest notice.
 - `WARNING` shows only warnings and errors.
