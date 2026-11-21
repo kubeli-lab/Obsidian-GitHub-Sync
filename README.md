@@ -95,7 +95,7 @@ The release workflow only runs when code files change (`main.ts`, `styles.css`, 
 
 `npm test` runs an end-to-end simulation of several people syncing one remote (concurrent edits, conflicts, rejected pushes, offline). It runs the real plugin code with a stubbed `obsidian` module and needs only `git`. `QUICK=1 npm test` skips the slowest scenario.
 
-Pull requests are merged with **squash** or **rebase** (no merge commits), so the PR title must follow the convention.
+Pull requests are merged with **squash** (no merge commits), so the PR title must follow the convention.
 
 On each push to `main`, release-please opens or updates a release PR that bumps `package.json` and `manifest.json`. Merging it creates the tag (without a `v` prefix) and the GitHub release, with `main.js`, `manifest.json` and `styles.css` attached. Release notes are generated on the GitHub release; there is no `CHANGELOG.md`.
 
