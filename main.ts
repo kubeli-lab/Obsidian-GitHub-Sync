@@ -202,6 +202,9 @@ export default class GHSyncPlugin extends Plugin {
 		    binary: this.settings.gitLocation + "git",
 		    maxConcurrentProcesses: 6,
 		    trimmed: false,
+		    // Never guess the author from the machine user and hostname: git must
+		    // use user.name and user.email from its configuration, or fail.
+		    config: ['user.useConfigOnly=true'],
 		};
 		git = simpleGit(simpleGitOptions);
 	}
@@ -492,6 +495,13 @@ export default class GHSyncPlugin extends Plugin {
 			return; })
 
 		if (!statusResult) {
+			return;
+		}
+
+		const gitName = (await git.raw(['config', '--get', 'user.name']).catch(() => "")).trim();
+		const gitEmail = (await git.raw(['config', '--get', 'user.email']).catch(() => "")).trim();
+		if (!gitName || !gitEmail) {
+			this.showNotice("Vault Digest: git author not configured. Run: git config --global user.name \"Your Name\" and git config --global user.email \"you@example.com\". Nothing was committed.", 'ERROR', 15000);
 			return;
 		}
 
