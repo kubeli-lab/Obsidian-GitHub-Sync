@@ -792,7 +792,7 @@ class GHSyncSettingTab extends PluginSettingTab {
 		howto.createEl("br");
         const linkEl = howto.createEl('p');
         linkEl.createEl('span', { text: 'See the ' });
-        linkEl.createEl('a', { href: 'https://github.com/kubeli-lab/obsidian-github-sync/blob/main/README.md', text: 'README' });
+        linkEl.createEl('a', { href: 'https://github.com/kubeli-lab/vault-digest/blob/main/README.md', text: 'README' });
         linkEl.createEl('span', { text: ' for more information and troubleshooting.' });
 
 		new Setting(containerEl)
