@@ -24,6 +24,6 @@
 	},
 	"dependencies": {
 		"set-interval-async": "^3.0.3",
-		"simple-git": "^4.0.1"
+		"simple-git": "^4.1.0"
 	}
 }
